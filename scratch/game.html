@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Run From The Dogs!</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #222; /* Dark background */
+            margin: 0;
+            font-family: 'Press Start 2P', cursive; /* Use the game font */
+            color: #fff; /* White text */
+            flex-direction: column; /* Stack elements vertically */
+        }
+        #gameCanvas {
+            border: 3px solid #fff; /* White border */
+            background-color: #5cb85c; /* Greenish background for grass */
+            display: block; /* Needed to prevent extra space below canvas */
+            max-width: 95%; /* Ensure canvas fits smaller screens */
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.3); /* Subtle glow */
+        }
+        #gameInfo {
+            margin-bottom: 15px; /* Space between info and canvas */
+            font-size: 1.2em;
+            text-align: center;
+        }
+        #messageBox {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8); /* Semi-transparent black */
+            color: #ff4444; /* Red text for game over */
+            padding: 30px;
+            border-radius: 10px;
+            font-size: 2em;
+            text-align: center;
+            display: none; /* Hidden by default */
+            z-index: 10;
+            border: 2px solid #ff4444;
+        }
+        #messageBox button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 0.8em;
+            cursor: pointer;
+            background-color: #ff4444;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            box-shadow: 0 4px #cc0000; /* Button shadow */
+            transition: all 0.1s ease;
+        }
+        #messageBox button:active {
+            box-shadow: none;
+            transform: translateY(4px);
+        }
+    </style>
+</head>
+<body>
+    <div id="gameInfo">
+        Lives: <span id="livesCount">3</span> | Score: <span id="scoreCount">0</span>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="messageBox">
+        <span id="messageText">Game Over!</span><br>
+        <button onclick="restartGame()">Restart</button>
+    </div>
+
+    <script>
+        // --- Canvas Setup ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const livesCountSpan = document.getElementById('livesCount');
+        const scoreCountSpan = document.getElementById('scoreCount');
+        const messageBox = document.getElementById('messageBox');
+        const messageText = document.getElementById('messageText');
+
+        // --- Game Configuration ---
+        let canvasWidth = Math.min(window.innerWidth * 0.9, 800); // Responsive width
+        let canvasHeight = Math.min(window.innerHeight * 0.7, 600); // Responsive height
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        const playerSize = 25; // Size of the player rectangle
+        const dogSize = 25;    // Size of the dog rectangle
+        const playerSpeed = 5; // Player's constant speed
+        const initialDogBaseSpeed = 1.5; // Starting base speed for dogs
+        const dogSpawnInterval = 10000; // ** NEW: 10 seconds **
+        const speedIncreaseInterval = 10000; // ** NEW: Increase speed every 10 seconds **
+        const maxDogsBeforeSpeedup = 5; // ** NEW: Condition for speed increase **
+        const initialLives = 3;
+        const playerColor = '#007bff'; // Blue color for player
+        const dogColor = '#dc3545';    // Red color for dogs
+
+        // --- Game State Variables ---
+        let player;
+        let dogs = [];
+        let lives;
+        let score;
+        let gameOver;
+        let keysPressed = {}; // Keep track of pressed keys
+        let currentDogBaseSpeed; // ** NEW: This will increase over time **
+        let lastDogSpawnTime = 0;
+        let lastSpeedIncreaseTime = 0; // ** NEW: Timer for speed increases **
+        let gameStartTime = 0;
+        let animationFrameId; // To control the game loop
+
+        // --- Player Object ---
+        function createPlayer() {
+            // ** NEW: Define player speed within the object for potential future use **
+            return {
+                x: canvas.width / 2 - playerSize / 2,
+                y: canvas.height / 2 - playerSize / 2,
+                width: playerSize,
+                height: playerSize,
+                speed: playerSpeed, // Use the constant playerSpeed
+                color: playerColor
+            };
+        }
+
+        // --- Dog Object ---
+        function createDog() {
+            // Spawn dogs off-screen from random edges
+            let x, y;
+            const edge = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
+            switch (edge) {
+                case 0: x = Math.random() * canvas.width; y = -dogSize; break;
+                case 1: x = canvas.width + dogSize; y = Math.random() * canvas.height; break;
+                case 2: x = Math.random() * canvas.width; y = canvas.height + dogSize; break;
+                case 3: x = -dogSize; y = Math.random() * canvas.height; break;
+            }
+
+            return {
+                x: x,
+                y: y,
+                width: dogSize,
+                height: dogSize,
+                // ** Assign speed based on the CURRENT base speed plus some variance **
+                speed: currentDogBaseSpeed + Math.random() * 0.5,
+                color: dogColor
+            };
+        }
+
+        // --- Input Handling ---
+        document.addEventListener('keydown', (event) => { keysPressed[event.key] = true; });
+        document.addEventListener('keyup', (event) => { keysPressed[event.key] = false; });
+
+        // --- Movement ---
+        function movePlayer() {
+            if (gameOver) return;
+            let dx = 0;
+            let dy = 0;
+            if (keysPressed['ArrowUp'] || keysPressed['w']) { dy -= player.speed; }
+            if (keysPressed['ArrowDown'] || keysPressed['s']) { dy += player.speed; }
+            if (keysPressed['ArrowLeft'] || keysPressed['a']) { dx -= player.speed; }
+            if (keysPressed['ArrowRight'] || keysPressed['d']) { dx += player.speed; }
+
+            if (dx !== 0 && dy !== 0) { // Normalize diagonal movement
+                const length = Math.sqrt(dx * dx + dy * dy);
+                dx = (dx / length) * player.speed;
+                dy = (dy / length) * player.speed;
+            }
+            player.x += dx;
+            player.y += dy;
+            player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+            player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+        }
+
+        function moveDogs() {
+            if (gameOver) return;
+            dogs.forEach(dog => {
+                const dx = player.x + player.width / 2 - (dog.x + dog.width / 2);
+                const dy = player.y + player.height / 2 - (dog.y + dog.height / 2);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance > (player.width / 2 + dog.width / 2) * 0.5) {
+                    const moveX = (dx / distance) * dog.speed;
+                    const moveY = (dy / distance) * dog.speed;
+                    dog.x += moveX;
+                    dog.y += moveY;
+                }
+            });
+        }
+
+        // --- Collision Detection ---
+        function checkCollisions() {
+            if (gameOver) return;
+            dogs.forEach((dog, index) => {
+                if (
+                    player.x < dog.x + dog.width &&
+                    player.x + player.width > dog.x &&
+                    player.y < dog.y + dog.height &&
+                    player.y + player.height > dog.y
+                ) {
+                    handleCollision(index);
+                }
+            });
+        }
+
+        function handleCollision(dogIndex) {
+            lives--;
+            livesCountSpan.textContent = lives;
+            if (lives <= 0) {
+                endGame();
+            } else {
+                dogs.splice(dogIndex, 1); // Remove the dog that collided
+                flashPlayerColor();
+            }
+        }
+
+        // --- Player Flashing on Hit ---
+        let playerOriginalColor = playerColor;
+        let isFlashing = false;
+        function flashPlayerColor() {
+            if (isFlashing) return;
+            isFlashing = true;
+            let flashCount = 0;
+            const intervalId = setInterval(() => {
+                player.color = (flashCount % 2 === 0) ? '#FFFFFF' : playerOriginalColor;
+                flashCount++;
+                if (flashCount >= 6) {
+                    clearInterval(intervalId);
+                    player.color = playerOriginalColor;
+                    isFlashing = false;
+                }
+            }, 100);
+        }
+
+        // --- Drawing ---
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Draw Player
+            ctx.fillStyle = player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            // Draw Dogs
+            dogs.forEach(dog => {
+                ctx.fillStyle = dog.color;
+                ctx.fillRect(dog.x, dog.y, dog.width, dog.height);
+            });
+        }
+
+        // --- Game Logic ---
+        function update(timestamp) {
+            if (gameOver) return;
+
+            if (!gameStartTime) { // Initialize timers on the first frame
+                gameStartTime = timestamp;
+                lastDogSpawnTime = timestamp;
+                lastSpeedIncreaseTime = timestamp; // Initialize speed timer too
+            }
+
+            const now = timestamp;
+            const elapsedTime = now - gameStartTime;
+            score = Math.floor(elapsedTime / 100);
+            scoreCountSpan.textContent = score;
+
+            // --- ** NEW Spawning and Speed Increase Logic ** ---
+            const maxTargetDogSpeed = player.speed * 1.1; // Target speed: 10% faster than player
+
+            if (dogs.length < maxDogsBeforeSpeedup) {
+                // Condition 1: Less than 5 dogs -> Spawn new dogs
+                if (now - lastDogSpawnTime > dogSpawnInterval) {
+                    dogs.push(createDog());
+                    lastDogSpawnTime = now;
+                    // Reset speed increase timer when spawning, so speed increase only starts
+                    // 10 seconds *after* the 5th dog spawns or 10s after the last increase attempt below limit
+                    lastSpeedIncreaseTime = now;
+                }
+            } else {
+                // Condition 2: 5 or more dogs -> Increase speed if needed
+                if (now - lastSpeedIncreaseTime > speedIncreaseInterval) {
+                    if (currentDogBaseSpeed < maxTargetDogSpeed) {
+                        // Increase base speed by 10%
+                        currentDogBaseSpeed *= 1.1;
+                        // Optional: Cap the speed slightly above the target to prevent large overshoots
+                        // currentDogBaseSpeed = Math.min(currentDogBaseSpeed, maxTargetDogSpeed * 1.01);
+
+                        console.log(`Dog speed increased! New base: ${currentDogBaseSpeed.toFixed(2)} (Target: ${maxTargetDogSpeed.toFixed(2)})`); // Debugging log
+
+                        // Update speed of ALL existing dogs based on the new base speed
+                        dogs.forEach(dog => {
+                            dog.speed = currentDogBaseSpeed + Math.random() * 0.5; // Apply new base + variance
+                        });
+                    } else {
+                         // Optional log when speed cap is reached
+                         // console.log(`Dog speed cap reached (${currentDogBaseSpeed.toFixed(2)} >= ${maxTargetDogSpeed.toFixed(2)})`);
+                    }
+                    lastSpeedIncreaseTime = now; // Update timer even if speed cap is reached
+                }
+            }
+            // --- End of New Logic ---
+
+            movePlayer();
+            moveDogs();
+            checkCollisions();
+            draw(); // Draw the updated positions
+
+            animationFrameId = requestAnimationFrame(update); // Continue the loop
+        }
+
+        // --- Game Flow ---
+        function startGame() {
+            // Reset game state
+            currentDogBaseSpeed = initialDogBaseSpeed; // ** Reset dog base speed **
+            player = createPlayer();
+            playerOriginalColor = player.color;
+            isFlashing = false;
+            dogs = [createDog()]; // Start with one dog using the initial speed
+            lives = initialLives;
+            score = 0;
+            gameOver = false;
+            keysPressed = {};
+            gameStartTime = 0; // Reset timers
+            lastDogSpawnTime = 0;
+            lastSpeedIncreaseTime = 0;
+
+            // Update UI
+            livesCountSpan.textContent = lives;
+            scoreCountSpan.textContent = score;
+            messageBox.style.display = 'none';
+
+            // Cancel any previous loop
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+
+            // Start the game loop
+            animationFrameId = requestAnimationFrame(update);
+        }
+
+        function endGame() {
+            gameOver = true;
+            cancelAnimationFrame(animationFrameId);
+            messageText.textContent = `Game Over! Score: ${score}`;
+            messageBox.style.display = 'block';
+        }
+
+        function restartGame() {
+            messageBox.style.display = 'none';
+            startGame();
+        }
+
+        // --- Resize Handling ---
+        function resizeCanvas() {
+            const oldWidth = canvasWidth;
+            const oldHeight = canvasHeight;
+            const playerRelativeX = player ? player.x / oldWidth : 0.5;
+            const playerRelativeY = player ? player.y / oldHeight : 0.5;
+
+            canvasWidth = Math.min(window.innerWidth * 0.9, 800);
+            canvasHeight = Math.min(window.innerHeight * 0.7, 600);
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+
+            if (player) {
+                player.x = playerRelativeX * canvasWidth;
+                player.y = playerRelativeY * canvasHeight;
+            }
+
+            // Redraw immediately after resize
+            if (!gameOver && animationFrameId) {
+                 draw();
+            } else if (gameOver) {
+                 draw();
+            } else {
+                 if (player) draw();
+            }
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- Initial Game Start ---
+        resizeCanvas(); // Set initial size
+        startGame(); // Start the game automatically
+
+    </script>
+</body>
+</html>
